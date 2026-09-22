@@ -21,7 +21,9 @@ s = StateSpaceSet(o)
   for (i, q) in enumerate((s1, s2, s, s3))
     @test dimension(q) == i
     @test size(q) == (10,)
+    @test axes(q) == (Base.OneTo(10),)
     @test length(q) == 10
+    @test eltype(q) == typeof(q[1])
   end
 
   @testset "MVector" begin
@@ -44,6 +46,25 @@ s = StateSpaceSet(o)
   @testset "embed downstream #41" begin
     X = StateSpaceSet{3, Float64}([rand(3) for _ in 1:3])
     @test X isa StateSpaceSet
+  end
+
+  @testset "generator constructor #28" begin
+    X = StateSpaceSet(rand(SVector{5, Float64}) for _ in 1:1000)
+    @test length(X) == 1000
+    @test dimension(X) == 5
+    @test eltype(X) == SVector{5,Float64}
+
+    Xm = StateSpaceSet((rand(SVector{3, Float64}) for _ in 1:8); container = MVector)
+    @test eltype(Xm) == MVector{3,Float64}
+    Xv = StateSpaceSet((rand(SVector{3, Float64}) for _ in 1:8); container = Vector)
+    @test eltype(Xv) == Vector{Float64}
+
+    emptygen = (SVector{3,Float64}(i, i, i) for i in 1:0)
+    Xe = StateSpaceSet{3,Float64}(emptygen)
+    @test isempty(Xe)
+    @test dimension(Xe) == 3
+    @test eltype(Xe) == SVector{3,Float64}
+    @test_throws ArgumentError StateSpaceSet(SVector{3,Float64}(i, i, i) for i in 1:0)
   end
 end
 
@@ -73,14 +94,33 @@ end
 
 @testset "hcat" begin
     x1 = 1:5; x2 = 2:6; x3 = 3:7; x4 = 4:8
-    @testset "T=$(T)" for T in (SVector, Vector)
-      D1, D2 = StateSpaceSet(x1, x2; container = T), StateSpaceSet(x3, x4; container = T)
+    @testset "T=$(T)" for T in (SVector, MVector, Vector)
+      D1 = StateSpaceSet(x1, x2; container = T)
+      D2 = StateSpaceSet(x3, x4; container = T)
       @test hcat(D1, x1) == StateSpaceSet(x1, x2, x1)
       @test hcat(D1, D2) == StateSpaceSet(x1, x2, x3, x4)
       @test hcat(x1, D1) == StateSpaceSet(x1, x1, x2)
       @test hcat(x1, D1, x2) == StateSpaceSet(x1, x1, x2, x2)
       @test StateSpaceSets.containertype(hcat(D1, x1)) <: T
     end
+
+    Ds = StateSpaceSet(x1, x2; container = SVector)
+    Dm = StateSpaceSet(x3, x4; container = MVector)
+    Dv = StateSpaceSet(x3, x4; container = Vector)
+    @test eltype(hcat(Ds, Dm)) <: MVector
+    @test eltype(hcat(Dm, Ds)) <: MVector
+    @test eltype(hcat(Ds, Dv)) <: Vector
+    @test eltype(hcat(Dv, Ds)) <: Vector
+
+    ints = StateSpaceSet(1:5)
+    floats = StateSpaceSet(collect(1.0:5.0))
+    @test eltype(eltype(hcat(ints, floats))) == Float64
+    @test_throws ErrorException hcat(StateSpaceSet(1:3), StateSpaceSet(1:4))
+
+    named1 = StateSpaceSet(x1, x2; names = [:x, :y])
+    named2 = StateSpaceSet(x3, x4; names = [:z, :w])
+    @test hcat(named1, named2).names == [:x, :y, :z, :w]
+    @test isnothing(hcat(named1, x1).names)
 end
 
 
@@ -92,6 +132,13 @@ end
   @test s[5] isa SVector{3, Float64}
   @test s[11:20] isa StateSpaceSet
   @test s[:, 2:3][:, 1] == s[:, 2]
+
+  # #31: `end` in the point index uses the formal one-dimensional Array axis.
+  @test s[1:end, 2] == s[:, 2]
+  @test s[1:end, 2:3] == s[:, 2:3]
+  @test s[2:end, 3] == s[2:100, 3]
+  @test lastindex(s, 1) == length(s)
+  @test lastindex(s, 2) == 1
 
   sub = view(s, 11:20)
   @test sub isa StateSpaceSets.SubStateSpaceSet
@@ -106,11 +153,45 @@ end
   @test_throws ErrorException (s[:,1] .= 0)
 end
 
+@testset "representation and metadata invariants" begin
+  data = rand(12, 3)
+  @testset "container=$(C)" for C in (SVector, MVector, Vector)
+    X = StateSpaceSet(data; container = C, names = [:x, :y, :z])
+    Y = copy(X)
+    @test StateSpaceSets.containertype(Y) == StateSpaceSets.containertype(X)
+    @test Y.names == X.names
+
+    rows = X[2:7]
+    @test StateSpaceSets.containertype(rows) == StateSpaceSets.containertype(X)
+    @test rows.names == X.names
+
+    cols = X[:, 2:3]
+    @test cols.names == [:y, :z]
+    @test eltype(eltype(cols)) == Float64
+    @test StateSpaceSets.containertype(cols) <: C
+
+    emptyrows = X[1:0]
+    @test isempty(emptyrows)
+    @test dimension(emptyrows) == 3
+    @test StateSpaceSets.containertype(emptyrows) == StateSpaceSets.containertype(X)
+
+    sub = view(X, 2:5)
+    @test sub.names == X.names
+    @test StateSpaceSets.containertype(sub) == StateSpaceSets.containertype(X)
+  end
+
+  X = StateSpaceSet(data; container = MVector, names = [:x, :y, :z])
+  X2 = StateSpaceSet(X)
+  @test StateSpaceSets.containertype(X2) == StateSpaceSets.containertype(X)
+  @test X2.names == X.names
+  @test_throws ErrorException StateSpaceSet(data; names = [:x, :x, :z])
+  @test_throws ErrorException StateSpaceSet(data; names = [:x, "y", :z])
+end
+
 @testset "copy" begin
   d = StateSpaceSet(rand(10, 2))
-  v = vec(d)
   d2 = copy(d)
-  d2[1] == d[1]
+  @test d2[1] == d[1]
   d2[1] = SVector(5.0, 5.0)
   @test d2[1] != d[1]
 end

@@ -1,5 +1,14 @@
 Changelog for StateSpaceSets.jl is kept w.r.t. version 1.3
 
+# 2.6 (unreleased)
+
+- Complete the `AbstractVector` contract while retaining the documented two-index convenience interface. `end` now works correctly on the formal point axis in multi-index expressions.
+- Copying, row slicing, dimension slicing, and views preserve point-container and dimension-name metadata instead of silently falling back to the default `SVector` representation.
+- `StateSpaceSet` can be constructed directly from point generators. Empty generators are supported by the typed `StateSpaceSet{D,T}(generator)` form.
+- Multi-input `hcat` now fills preallocated output storage directly instead of constructing temporary datasets and flattened collections for every point. Mixed point containers use deterministic least-restrictive promotion (`SVector` → `MVector` → `Vector`).
+- `statespace_sampler` now has explicit sampling-strategy dispatch through `UniformSampler` and `LatinHypercubeSampler`. Latin-hypercube sampling is available for `HRectangle` without introducing a new package dependency.
+- State-space dimension names are validated to be unique `Symbol`s.
+
 # 2.5
 
 - `StateSpaceSet`s can now have their dimensions named and use those names to access the dimensions. See the docstring of `StateSpaceSet` and the `names` keyword.

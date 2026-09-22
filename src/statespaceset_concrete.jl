@@ -18,16 +18,19 @@ When iterated over, it iterates over its contained points.
 
 ## Construction
 
-Constructing a `StateSpaceSet` is done in three ways:
+Constructing a `StateSpaceSet` is done in four ways:
 
-1. By giving in each individual **columns** of the state space set as `Vector{<:Real}`:
+1. By giving in each individual **columns** of the state space set as `Vector`:
    `StateSpaceSet(x, y, z, ...)`.
 2. By giving in a matrix whose rows are the state space points: `StateSpaceSet(m)`.
 3. By giving in directly a vector of vectors (state space points): `StateSpaceSet(v_of_v)`.
+4. By giving a generator of state-space points: `StateSpaceSet(point for point in source)`.
+   A non-empty generator infers dimension and scalar type from its first point. For an empty
+   generator use the typed form `StateSpaceSet{D,T}(generator)`.
 
 All constructors allow for two keywords:
 - `container` which sets the type of `V` (the type of inner vectors).
-  At the moment options are only `SVector`, `MVector`, or `Vector`, and by default `SVector` is used.
+  At the moment options are `SVector`, `MVector`, or `Vector`, and by default `SVector` is used.
 - `names` which can be an iterable of length `D` whose elements are `Symbol`s.
   This allows assigning a name to each dimension and accessing the dimension by name,
   see below. `names` is `nothing` if not given. Use `StateSpaceSet(s; names)` to add
@@ -35,20 +38,19 @@ All constructors allow for two keywords:
 
 ## Description of indexing
 
-When indexed with 1 index, `StateSpaceSet` behaves exactly like its encapsulated vector.
-i.e., a vector of vectors (state space points).
+When indexed with 1 index, `StateSpaceSet` behaves exactly like its encapsulated vector,
+i.e. a vector of vectors (state space points).
 When indexed with 2 indices it behaves like a matrix where each row is a point.
 
 In the following let `i, j` be integers, `typeof(X) <: AbstractStateSpaceSet`
 and `v1, v2` be `<: AbstractVector{Int}` (`v1, v2` could also be ranges,
 and for performance benefits make `v2` an `SVector{Int}`).
 
-* `X[i] == X[i, :]` gives the `i`th point (returns an `SVector`)
-* `X[v1] == X[v1, :]`, returns a `StateSpaceSet` with the points in those indices.
-* `X[:, j]` gives the `j`th variable timeseries (or collection), as `Vector`
-* `X[v1, v2], X[:, v2]` returns a `StateSpaceSet` with the appropriate entries (first indices
-  being "time"/point index, while second being variables)
-* `X[i, j]` value of the `j`th variable, at the `i`th timepoint
+* `X[i] == X[i, :]` gives the `i`th point.
+* `X[v1] == X[v1, :]` returns a `StateSpaceSet` with the points in those indices.
+* `X[:, j]` gives the `j`th variable timeseries (or collection), as `Vector`.
+* `X[v1, v2], X[:, v2]` returns a `StateSpaceSet` with the appropriate entries.
+* `X[i, j]` gives the value of the `j`th variable at the `i`th point.
 
 In all examples above, `j` can also be a `Symbol`, provided that `names` has been
 given when creating the state space set. This allows accessing a dimension by name.
@@ -56,7 +58,7 @@ This is provided as a convenience and it is not an optimized operation, hence
 recommended to be used primarily with `X[:, j::Symbol]`.
 
 Use `Matrix(ssset)` or `StateSpaceSet(matrix)` to convert. It is assumed
-that each *column* of the `matrix` is one variable.
+that each *column* of the matrix is one variable.
 If you have various timeseries vectors `x, y, z, ...` pass them like
 `StateSpaceSet(x, y, z, ...)`. You can use `columns(dataset)` to obtain the reverse,
 i.e. all columns of the dataset in a tuple.
@@ -66,9 +68,9 @@ struct StateSpaceSet{D, T, V<:AbstractVector, N} <: AbstractStateSpaceSet{D,T,V,
     names::N
     function StateSpaceSet{D, T, V, N}(data, names = nothing) where {D,T,V,N}
         if !isnothing(names)
-            if length(names) != D
-                error("Given names must be as many as the dimension of the set!")
-            end
+            length(names) == D || error("Given names must be as many as the dimension of the set!")
+            all(n -> n isa Symbol, names) || error("State-space dimension names must be Symbols.")
+            length(unique(collect(names))) == D || error("State-space dimension names must be unique.")
         end
         if eltype(data) ≠ V
             data = V.(data)
@@ -77,42 +79,121 @@ struct StateSpaceSet{D, T, V<:AbstractVector, N} <: AbstractStateSpaceSet{D,T,V,
     end
 end
 const SSSet = StateSpaceSet # alias
-# Empty dataset:
-StateSpaceSet{D, T}(; names = nothing) where {D,T} = StateSpaceSet{D,T,SVector{D,T},typeof(names)}(SVector{D,T}[], names)
-# Convenience constructors
-StateSpaceSet{D, T}(v::Vector{V}; names = nothing) where {D,T,V} = StateSpaceSet{D,T,V,typeof(names)}(v, names)
-StateSpaceSet{D, T, V}(v::Vector{U}; names = nothing) where {D,T,V,U} = StateSpaceSet{D,T,V,typeof(names)}(V.(v), names)
 
-# Identity constructor:
+@inline function _pointtype(container, D, T)
+    if container <: SVector
+        return SVector{D,T}
+    elseif container <: MVector
+        return MVector{D,T}
+    elseif container <: Vector
+        return Vector{T}
+    else
+        throw(ArgumentError("Unsupported point container $(container). Use SVector, MVector, or Vector."))
+    end
+end
+
+_static_point_info(::Type{SVector{D,T}}) where {D,T} = (D, T)
+_static_point_info(::Type{MVector{D,T}}) where {D,T} = (D, T)
+_static_point_info(::Type) = nothing
+
+# Empty dataset:
+StateSpaceSet{D, T}(; names = nothing) where {D,T} =
+    StateSpaceSet{D,T,SVector{D,T},typeof(names)}(SVector{D,T}[], names)
+
+# Convenience constructors
+StateSpaceSet{D, T}(v::Vector{V}; names = nothing) where {D,T,V} =
+    StateSpaceSet{D,T,V,typeof(names)}(v, names)
+StateSpaceSet{D, T, V}(v::Vector{U}; names = nothing) where {D,T,V,U} =
+    StateSpaceSet{D,T,V,typeof(names)}(U === V ? v : V.(v), names)
+
+# Identity/reconstruction constructor. Preserve representation and metadata unless the caller
+# explicitly asks for a different value.
 StateSpaceSet{D, T}(s::StateSpaceSet{D, T}) where {D,T} = s
-StateSpaceSet(s::StateSpaceSet; names = nothing) = StateSpaceSet(vec(s); names)
+function StateSpaceSet(
+        s::StateSpaceSet; container = containertype(s), names = s.names,
+    )
+    return StateSpaceSet(vec(s); container, names)
+end
 
 function StateSpaceSet(v::Vector{V}; container = SVector, names = nothing) where {V<:AbstractVector}
+    if isempty(v)
+        info = _static_point_info(V)
+        isnothing(info) && throw(ArgumentError(
+            "Cannot infer state-space dimension from an empty vector of dynamically sized points. " *
+            "Use StateSpaceSet{D,T,V}(data) or StateSpaceSet{D,T}().",
+        ))
+        n, t = info
+        U = _pointtype(container, n, t)
+        return StateSpaceSet{n,t,U,typeof(names)}(U[], names)
+    end
     n = length(v[1])
     t = eltype(v[1])
     for p in v
-        length(p) != n && error("Inner vectors must all have same length")
+        length(p) == n || error("Inner vectors must all have same length")
     end
-    # TODO: There must be a way to generalize this to any container!
-    # we can use `Base.typename(typeof(v[1])).wrapper` but this is so internal... :(
-    if container <: SVector
-        U = SVector{n, t}
-    elseif container <: MVector
-        U = MVector{n, t}
-    else
-        U = Vector{t}
-    end
-    if U != V
-        u = U.(v)
-    else
-        u = v
-    end
+    U = _pointtype(container, n, t)
+    u = U == V ? v : U.(v)
     return StateSpaceSet{n,t,U,typeof(names)}(u, names)
 end
 
 # Concatenating existing state space sets
 function StateSpaceSet(xs::AbstractStateSpaceSet...)
     return hcat(xs...)
+end
+
+###########################################################################
+# Generator / iterator construction
+###########################################################################
+function _sizehint_from_iterator!(data, iter)
+    sizekind = Base.IteratorSize(typeof(iter))
+    (sizekind isa Base.HasLength || sizekind isa Base.HasShape) || return data
+    sizehint!(data, length(iter))
+    return data
+end
+
+function StateSpaceSet(iter::Base.Generator; container = SVector, names = nothing)
+    state = iterate(iter)
+    isnothing(state) && throw(ArgumentError(
+        "Cannot infer state-space dimension from an empty generator. " *
+        "Use StateSpaceSet{D,T}(generator).",
+    ))
+    firstpoint, st = state
+    firstpoint isa AbstractVector || throw(ArgumentError(
+        "A StateSpaceSet generator must yield AbstractVector points.",
+    ))
+    D = length(firstpoint)
+    T = eltype(firstpoint)
+    V = _pointtype(container, D, T)
+    data = Vector{V}()
+    _sizehint_from_iterator!(data, iter)
+    push!(data, V(firstpoint))
+    while true
+        state = iterate(iter, st)
+        isnothing(state) && break
+        point, st = state
+        point isa AbstractVector || throw(ArgumentError(
+            "A StateSpaceSet generator must yield AbstractVector points.",
+        ))
+        length(point) == D || error("Inner vectors must all have same length")
+        push!(data, V(point))
+    end
+    return StateSpaceSet{D,T,V,typeof(names)}(data, names)
+end
+
+function StateSpaceSet{D,T}(
+        iter::Base.Generator; container = SVector, names = nothing,
+    ) where {D,T}
+    V = _pointtype(container, D, T)
+    data = Vector{V}()
+    _sizehint_from_iterator!(data, iter)
+    for point in iter
+        point isa AbstractVector || throw(ArgumentError(
+            "A StateSpaceSet generator must yield AbstractVector points.",
+        ))
+        length(point) == D || error("Inner vectors must all have length $D")
+        push!(data, V(point))
+    end
+    return StateSpaceSet{D,T,V,typeof(names)}(data, names)
 end
 
 ###########################################################################
@@ -147,7 +228,7 @@ end
 end
 
 #####################################################################################
-#                                StateSpaceSet <-> Matrix                                 #
+#                                StateSpaceSet <-> Matrix                           #
 #####################################################################################
 function Base.Matrix{S}(d::AbstractStateSpaceSet{D,T}) where {S, D, T}
     mat = Matrix{S}(undef, length(d), D)
@@ -164,13 +245,7 @@ function StateSpaceSet(mat::AbstractMatrix{T}; warn = true, container = SVector,
     N, D = size(mat)
     warn && D > 100 && @warn "You are attempting to make a StateSpaceSet of dimensions > 100"
     warn && D > N && @warn "You are attempting to make a StateSpaceSet of a matrix with more columns than rows."
-    if container <: SVector
-        V = SVector{D,T}
-    elseif container <: MVector
-        V = MVector{D,T}
-    else
-        V = Vector{T}
-    end
+    V = _pointtype(container, D, T)
     data = [V(row) for row in eachrow(mat)]
     StateSpaceSet{D,T,V,typeof(names)}(data, names)
 end
@@ -199,7 +274,7 @@ function SubStateSpaceSet(par, data)
     T = eltype(SV)
     D = length(SV)
     V = containertype(par)
-    N = eltype(par.names)
+    N = typeof(par.names)
     SubStateSpaceSet{D,T,V,N,P,S}(par, data, par.names)
 end
 

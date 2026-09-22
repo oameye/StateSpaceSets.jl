@@ -24,6 +24,8 @@ using LinearAlgebra, Random, Statistics, Test
     rect = HRectangle(SVector(0,0), SVector(1,1))
     gen, isinside = statespace_sampler(rect, 1)
     @test gen() isa Vector
+    gen, isinside = statespace_sampler(rect, UniformSampler(), 1)
+    @test isinside(gen())
 end
 
 @testset "sphere" begin
@@ -55,4 +57,48 @@ end
     rect = HSphere(0.1, SVector(0.1, 0.1))
     gen, isinside = statespace_sampler(rect, 1)
     @test gen() isa Vector
+end
+
+@testset "Latin hypercube #17" begin
+    D = 4
+    n = 32
+    mins = [-2.0, 1.0, 4.0, -7.0]
+    maxs = [3.0, 5.0, 9.0, -1.0]
+    region = HRectangle(mins, maxs)
+    gen, isinside = statespace_sampler(region, LatinHypercubeSampler(n), 1234)
+
+    # Copy because the sampler deliberately reuses thread-local scratch storage.
+    points = [copy(gen()) for _ in 1:n]
+    @test all(isinside, points)
+
+    # Every coordinate occupies every stratum exactly once in each complete batch.
+    for d in 1:D
+        strata = sort([
+            floor(Int, n * (p[d] - mins[d]) / (maxs[d] - mins[d]))
+            for p in points
+        ])
+        @test strata == collect(0:n-1)
+    end
+
+    points2 = [copy(gen()) for _ in 1:n]
+    @test all(isinside, points2)
+    for d in 1:D
+        strata = sort([
+            floor(Int, n * (p[d] - mins[d]) / (maxs[d] - mins[d]))
+            for p in points2
+        ])
+        @test strata == collect(0:n-1)
+    end
+
+    g1, _ = statespace_sampler(region, LatinHypercubeSampler(8), 42)
+    g2, _ = statespace_sampler(region, LatinHypercubeSampler(8), 42)
+    @test [copy(g1()) for _ in 1:8] == [copy(g2()) for _ in 1:8]
+    @test_throws ArgumentError LatinHypercubeSampler(0)
+    @test_throws ArgumentError statespace_sampler(HRectangle([0.0], [0.0]), 1)
+end
+
+@testset "grid strategy dispatch" begin
+    grid = (range(-1.0, 1.0; length = 10), range(2.0, 4.0; length = 10))
+    gen, inside = statespace_sampler(grid, LatinHypercubeSampler(16), 7)
+    @test all(inside(copy(gen())) for _ in 1:16)
 end
