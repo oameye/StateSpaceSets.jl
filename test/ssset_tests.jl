@@ -45,6 +45,18 @@ s = StateSpaceSet(o)
     X = StateSpaceSet{3, Float64}([rand(3) for _ in 1:3])
     @test X isa StateSpaceSet
   end
+
+  @testset "generator" begin
+    X = StateSpaceSet(rand(SVector{5, Float64}) for _ in 1:20)
+    @test length(X) == 20
+    @test dimension(X) == 5
+
+    Xm = StateSpaceSet((rand(SVector{3, Float64}) for _ in 1:4); container = MVector)
+    @test Xm[1] isa MVector
+
+    emptygen = (SVector{3,Float64}(i, i, i) for i in 1:0)
+    @test isempty(StateSpaceSet{3,Float64}(emptygen))
+  end
 end
 
 
@@ -199,4 +211,3 @@ end
   @test s4[:, :x] == x
 
 end
-

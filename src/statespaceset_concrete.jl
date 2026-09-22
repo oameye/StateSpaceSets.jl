@@ -18,12 +18,14 @@ When iterated over, it iterates over its contained points.
 
 ## Construction
 
-Constructing a `StateSpaceSet` is done in three ways:
+Constructing a `StateSpaceSet` is done in four ways:
 
 1. By giving in each individual **columns** of the state space set as `Vector{<:Real}`:
    `StateSpaceSet(x, y, z, ...)`.
 2. By giving in a matrix whose rows are the state space points: `StateSpaceSet(m)`.
 3. By giving in directly a vector of vectors (state space points): `StateSpaceSet(v_of_v)`.
+4. By giving a generator of state-space points: `StateSpaceSet(point for point in source)`.
+   For an empty generator use `StateSpaceSet{D,T}(generator)`.
 
 All constructors allow for two keywords:
 - `container` which sets the type of `V` (the type of inner vectors).
@@ -116,6 +118,53 @@ function StateSpaceSet(xs::AbstractStateSpaceSet...)
 end
 
 ###########################################################################
+# StateSpaceSet(generators of points)
+###########################################################################
+function StateSpaceSet(iter::Base.Generator; container = SVector, names = nothing)
+    state = iterate(iter)
+    isnothing(state) && throw(ArgumentError(
+        "Cannot infer the dimension of an empty generator. Use StateSpaceSet{D,T}(generator).",
+    ))
+    firstpoint, st = state
+    firstpoint isa AbstractVector || throw(ArgumentError("Generator must yield vectors."))
+    D = length(firstpoint)
+    T = eltype(firstpoint)
+    V = container <: SVector ? SVector{D,T} : container <: MVector ? MVector{D,T} : Vector{T}
+    data = Vector{V}()
+    sizekind = Base.IteratorSize(typeof(iter))
+    if sizekind isa Base.HasLength || sizekind isa Base.HasShape
+        sizehint!(data, length(iter))
+    end
+    push!(data, V(firstpoint))
+    while true
+        state = iterate(iter, st)
+        isnothing(state) && break
+        point, st = state
+        point isa AbstractVector || throw(ArgumentError("Generator must yield vectors."))
+        length(point) == D || error("Inner vectors must all have same length")
+        push!(data, V(point))
+    end
+    return StateSpaceSet{D,T,V,typeof(names)}(data, names)
+end
+
+function StateSpaceSet{D,T}(
+        iter::Base.Generator; container = SVector, names = nothing,
+    ) where {D,T}
+    V = container <: SVector ? SVector{D,T} : container <: MVector ? MVector{D,T} : Vector{T}
+    data = Vector{V}()
+    sizekind = Base.IteratorSize(typeof(iter))
+    if sizekind isa Base.HasLength || sizekind isa Base.HasShape
+        sizehint!(data, length(iter))
+    end
+    for point in iter
+        point isa AbstractVector || throw(ArgumentError("Generator must yield vectors."))
+        length(point) == D || error("Inner vectors must all have length $D")
+        push!(data, V(point))
+    end
+    return StateSpaceSet{D,T,V,typeof(names)}(data, names)
+end
+
+###########################################################################
 # StateSpaceSet(Vectors of stuff)
 ###########################################################################
 function StateSpaceSet(vecs::AbstractVector{T}...; container = SVector, names = nothing) where {T}
@@ -139,7 +188,7 @@ end
             l < L && (L = l)
         end
         data = Vector{SVector{$D, T}}(undef, L)
-        for i in 1:L
+        for i = 1:L
             @inbounds data[i] = SVector{$D, T}($(gens...))
         end
         data
