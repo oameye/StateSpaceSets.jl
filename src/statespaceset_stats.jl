@@ -5,8 +5,8 @@
 """
     minima(dataset)
 
-Return an `SVector` that contains the minimum elements of each timeseries of the
-dataset.
+Return a point container of the same type as `dataset` containing the minimum element
+of each timeseries.
 """
 function minima(data::AbstractStateSpaceSet{D, T, V}) where {D, T<:Real, V}
     m = Vector(data[1])
@@ -22,8 +22,9 @@ end
 
 """
     maxima(dataset)
-Return an `SVector` that contains the maximum elements of each timeseries of the
-dataset.
+
+Return a point container of the same type as `dataset` containing the maximum element
+of each timeseries.
 """
 function maxima(data::AbstractStateSpaceSet{D, T, V}) where {D, T<:Real, V}
     m = Vector(data[1])
@@ -83,10 +84,15 @@ using Statistics: mean, std
 """
     standardize(d::StateSpaceSet) → r
 
-Create a standardized version of the input set where each column
-is transformed to have mean 0 and standard deviation 1.
+Create a standardized version of the input set where each column is transformed to
+have mean 0 and standard deviation 1. The point-container type and dimension names of
+`d` are preserved.
 """
-standardize(d::AbstractStateSpaceSet) = StateSpaceSet(standardized_timeseries(d)[1]...)
+function standardize(d::AbstractStateSpaceSet)
+    xs, _, _ = standardized_timeseries(d)
+    return StateSpaceSet(hcat(xs...); container = containertype(d), names = d.names)
+end
+
 function standardized_timeseries(d::AbstractStateSpaceSet)
     xs = columns(d)
     means = mean.(xs)
@@ -106,42 +112,48 @@ using Statistics: mean, std
 using StaticArraysCore: MMatrix, MVector, SMatrix, SVector
 
 """
-    cov(d::StateSpaceSet) → m::SMatrix
+    cov(d::StateSpaceSet)
 
-Compute the covariance matrix `m` from the columns of `d`, where `m[i, j]` is the covariance
-between `d[:, i]` and `d[:, j]`.
+Compute the covariance matrix from the columns of `d`, where `m[i, j]` is the covariance
+between `d[:, i]` and `d[:, j]`. The default `SVector` representation uses the optimized
+static implementation; other point-container types use the dense matrix implementation.
 """
-cov(x::AbstractStateSpaceSet) = fastcov(vec(x))
-
-"""
-    mean_and_cov(d::StateSpaceSet) → μ, m::SMatrix
-
-Return a tuple of the column means `μ` and covariance matrix `m`.
-
-Column means are always computed for the covariance matrix, so this is faster
-than computing both quantities separately.
-"""
-mean_and_cov(x::AbstractStateSpaceSet) = fastmean_and_cov(vec(x))
+cov(x::AbstractStateSpaceSet{D,T,V}) where {D,T<:AbstractFloat,V<:SVector} = fastcov(vec(x))
+cov(x::AbstractStateSpaceSet) = Statistics.cov(Matrix(x))
 
 """
-    cor(d::StateSpaceSet) → m::SMatrix
+    mean_and_cov(d::StateSpaceSet) → μ, m
 
-Compute the corrlation matrix `m` from the columns of `d`, where `m[i, j]` is the
-correlation between `d[:, i]` and `d[:, j]`.
+Return the column means `μ` and covariance matrix `m`. The default `SVector`
+representation uses the optimized static implementation; other point-container types
+use the dense matrix implementation.
 """
-cor(x::AbstractStateSpaceSet) = fastcor(vec(x))
+mean_and_cov(x::AbstractStateSpaceSet{D,T,V}) where {D,T<:AbstractFloat,V<:SVector} = fastmean_and_cov(vec(x))
+function mean_and_cov(x::AbstractStateSpaceSet)
+    m = Matrix(x)
+    μ = vec(mean(m; dims = 1))
+    return μ, Statistics.cov(m)
+end
 
-function fastcov(x::Vector{SVector{D, T}}) where {D, T}
-    T <: AbstractFloat || error("Need `eltype(x[i]) <: AbstractFloat` ∀ i ∈ 1:length(x). Got `eltype(x[i])=$(eltype(first(x)))`")
+"""
+    cor(d::StateSpaceSet)
+
+Compute the correlation matrix from the columns of `d`, where `m[i, j]` is the
+correlation between `d[:, i]` and `d[:, j]`. The default `SVector` representation uses
+the optimized static implementation; other point-container types use the dense matrix
+implementation.
+"""
+cor(x::AbstractStateSpaceSet{D,T,V}) where {D,T<:AbstractFloat,V<:SVector} = fastcor(vec(x))
+cor(x::AbstractStateSpaceSet) = Statistics.cor(Matrix(x))
+
+function fastcov(x::AbstractVector{SVector{D, T}}) where {D, T<:AbstractFloat}
     μ = mean(x)
     return fastcov(μ, x)
 end
 
-function fastcov(μ, x::Vector{SVector{D, T}}) where {D, T}
-    T <: AbstractFloat || error("Need `eltype(x[i]) <: AbstractFloat` ∀ i ∈ 1:length(x). Got `eltype(x[i])=$(eltype(first(x)))`")
+function fastcov(μ, x::AbstractVector{SVector{D, T}}) where {D, T<:AbstractFloat}
     N = length(x) - 1
     C = MMatrix{D, D}(zeros(D, D))
-    x̄ = mean(x)
     Δx = MVector{D}(zeros(D))
     @inbounds for xᵢ in x
         Δx .= xᵢ - μ
@@ -151,14 +163,14 @@ function fastcov(μ, x::Vector{SVector{D, T}}) where {D, T}
     return SMatrix{D, D}(C)
 end
 
-function fastmean_and_cov(x::Vector{SVector{D, T}}) where {D, T}
+function fastmean_and_cov(x::AbstractVector{SVector{D, T}}) where {D, T<:AbstractFloat}
     μ = mean(x)
     Σ = fastcov(μ, x)
     return μ, Σ
 end
 
 # Non-allocating and faster than writing a wrapper.
-function fastcor(x::Vector{SVector{D, T}}) where {D, T}
+function fastcor(x::AbstractVector{SVector{D, T}}) where {D, T<:AbstractFloat}
     μ, Σ = fastmean_and_cov(x)
     σ = std(x)
     C = MMatrix{D, D}(zeros(D, D))
