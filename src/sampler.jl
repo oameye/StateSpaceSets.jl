@@ -1,10 +1,22 @@
 export statespace_sampler
 export HSphere, HRectangle, HSphereSurface
+export SamplingMethod, UniformSampler, LatinHypercubeSampler
 
 using Random
 using LinearAlgebra: norm
 
 abstract type Region end
+abstract type SamplingMethod end
+
+struct UniformSampler <: SamplingMethod end
+
+struct LatinHypercubeSampler <: SamplingMethod
+    batchsize::Int
+    function LatinHypercubeSampler(batchsize::Integer)
+        batchsize > 0 || throw(ArgumentError("batchsize must be positive"))
+        new(Int(batchsize))
+    end
+end
 
 """
     statespace_sampler(region [, seed = 42]) → sampler, isinside
@@ -136,6 +148,76 @@ function (s::RectangleGenerator)()
     return dummy
 end
 
+statespace_sampler(
+    region::Union{Region,HRectangle}, ::UniformSampler, seed = abs(rand(Int)),
+) = statespace_sampler(region, seed)
+
+mutable struct LatinHypercubeGenerator{T, V<:AbstractVector{T}, R} <: Function
+    mins::V
+    difs::V
+    dummies::Vector{Vector{T}}
+    samples::Matrix{T}
+    permutation::Vector{Int}
+    rng::R
+    next::Int
+    lock::ReentrantLock
+end
+
+function refill!(s::LatinHypercubeGenerator)
+    D, n = size(s.samples)
+    for d in 1:D
+        s.permutation .= 1:n
+        shuffle!(s.rng, s.permutation)
+        for k in 1:n
+            u = (s.permutation[k] - 1 + rand(s.rng)) / n
+            @inbounds s.samples[d, k] = s.mins[d] + u*s.difs[d]
+        end
+    end
+    s.next = 1
+    return s
+end
+
+function statespace_sampler(
+        region::HRectangle, method::LatinHypercubeSampler, seed = abs(rand(Int)),
+    )
+    as = region.mins
+    bs = region.maxs
+    @assert length(as) == length(bs) > 0
+    T = as[1] isa AbstractFloat ? eltype(as) : Float64
+    mins = T.(as)
+    difs = T.(bs .- as)
+    all(>(zero(T)), difs) || throw(ArgumentError(
+        "Latin hypercube sampling requires min < max in every dimension",
+    ))
+
+    D = length(as)
+    n = method.batchsize
+    dummies = [zeros(T, D) for _ in 1:Threads.nthreads()]
+    gen = LatinHypercubeGenerator(
+        mins, difs, dummies, Matrix{T}(undef, D, n), collect(1:n),
+        Xoshiro(seed), n + 1, ReentrantLock(),
+    )
+    refill!(gen)
+    isinside(x) = all(i -> as[i] ≤ x[i] < bs[i], eachindex(x))
+    return gen, isinside
+end
+
+function (s::LatinHypercubeGenerator)()
+    dummy = s.dummies[Threads.threadid()]
+    lock(s.lock)
+    try
+        s.next > size(s.samples, 2) && refill!(s)
+        k = s.next
+        s.next += 1
+        for d in axes(s.samples, 1)
+            @inbounds dummy[d] = s.samples[d, k]
+        end
+    finally
+        unlock(s.lock)
+    end
+    return dummy
+end
+
 """
     statespace_sampler(grid::NTuple{N, AbstractRange} [, seed])
 
@@ -147,4 +229,11 @@ function statespace_sampler(
     ) where {N}
     region = HRectangle(minimum.(grid), maximum.(grid))
     return statespace_sampler(region, seed)
+end
+
+function statespace_sampler(
+        grid::NTuple{N, AbstractRange}, method::SamplingMethod, seed = abs(rand(Int)),
+    ) where {N}
+    region = HRectangle(minimum.(grid), maximum.(grid))
+    return statespace_sampler(region, method, seed)
 end
