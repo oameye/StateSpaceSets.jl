@@ -43,7 +43,7 @@ In the following let `i, j` be integers, `typeof(X) <: AbstractStateSpaceSet`
 and `v1, v2` be `<: AbstractVector{Int}` (`v1, v2` could also be ranges,
 and for performance benefits make `v2` an `SVector{Int}`).
 
-* `X[i] == X[i, :]` gives the `i`th point (returns an `SVector`)
+* `X[i] == X[i, :]` gives the `i`th point using the configured point-container type.
 * `X[v1] == X[v1, :]`, returns a `StateSpaceSet` with the points in those indices.
 * `X[:, j]` gives the `j`th variable timeseries (or collection), as `Vector`
 * `X[v1, v2], X[:, v2]` returns a `StateSpaceSet` with the appropriate entries (first indices
@@ -85,7 +85,9 @@ StateSpaceSet{D, T, V}(v::Vector{U}; names = nothing) where {D,T,V,U} = StateSpa
 
 # Identity constructor:
 StateSpaceSet{D, T}(s::StateSpaceSet{D, T}) where {D,T} = s
-StateSpaceSet(s::StateSpaceSet; names = nothing) = StateSpaceSet(vec(s); names)
+function StateSpaceSet(s::StateSpaceSet{D,T,V}; names = nothing) where {D,T,V}
+    return StateSpaceSet{D,T,V}(vec(s); names)
+end
 
 function StateSpaceSet(v::Vector{V}; container = SVector, names = nothing) where {V<:AbstractVector}
     n = length(v[1])
@@ -199,7 +201,7 @@ function SubStateSpaceSet(par, data)
     T = eltype(SV)
     D = length(SV)
     V = containertype(par)
-    N = eltype(par.names)
+    N = typeof(par.names)
     SubStateSpaceSet{D,T,V,N,P,S}(par, data, par.names)
 end
 

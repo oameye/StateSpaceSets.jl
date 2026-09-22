@@ -5,6 +5,7 @@ testfile(file, testname=defaultname(file)) = @testset "$testname" begin; include
 
 @testset "StateSpaceSets.jl" begin
     testfile("ssset_tests.jl")
+    testfile("interface_tests.jl")
     testfile("ssset_distance_tests.jl")
     testfile("utils_tests.jl")
     testfile("sampler_tests.jl")

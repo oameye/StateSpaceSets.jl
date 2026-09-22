@@ -26,17 +26,22 @@ containertype(::AbstractStateSpaceSet{D,T,V}) where {D,T,V} = V
 # Base extensions
 ###########################################################################################
 for f in (
-        :length, :sort!, :iterate, :firstindex, :lastindex, :size,
+        :length, :sort!, :iterate, :firstindex, :size,
     )
     @eval Base.$(f)(d::AbstractStateSpaceSet, args...; kwargs...) = $(f)(vec(d), args...; kwargs...)
 end
 
 Base.:(==)(d1::AbstractStateSpaceSet, d2::AbstractStateSpaceSet) = vec(d1) == vec(d2)
-Base.copy(d::AbstractStateSpaceSet) = StateSpaceSet(copy(vec(d)); names = d.names)
+Base.copy(d::AbstractStateSpaceSet{D,T,V}) where {D,T,V} =
+    StateSpaceSet{D,T,V}(copy(vec(d)); names = d.names)
 Base.sort(d::AbstractStateSpaceSet) = sort!(copy(d))
 @inline Base.eltype(::Type{<:AbstractStateSpaceSet{D, T, V}}) where {D, T, V} = V
 @inline Base.IteratorSize(::Type{<:AbstractStateSpaceSet}) = Base.HasLength()
+@inline Base.IndexStyle(::Type{<:AbstractStateSpaceSet}) = IndexLinear()
 Base.eachcol(ds::AbstractStateSpaceSet) = (ds[:, i] for i in 1:dimension(ds))
+
+@inline Base.lastindex(d::AbstractStateSpaceSet) = length(d)
+@inline Base.lastindex(d::AbstractStateSpaceSet, dim::Integer) = dim == 1 ? length(d) : 1
 
 """
     columns(ssset) -> x, y, z, ...
@@ -55,8 +60,8 @@ end
 ###########################################################################################
 # 1D indexing over the container elements:
 @inline Base.getindex(d::AbstractStateSpaceSet, i::Int) = vec(d)[i]
-@inline Base.getindex(d::AbstractStateSpaceSet, i) = StateSpaceSet(vec(d)[i])
-@inline Base.lastindex(d::AbstractStateSpaceSet) = length(d)
+@inline Base.getindex(d::AbstractStateSpaceSet{D,T,V}, i) where {D,T,V} =
+    StateSpaceSet{D,T,V}(vec(d)[i]; names = d.names)
 
 # 2D indexing with second index being column (reduces indexing to 1D indexing)
 @inline Base.getindex(d::AbstractStateSpaceSet, i, ::Colon) = d[i]
@@ -67,13 +72,36 @@ end
 @inline Base.getindex(d::AbstractStateSpaceSet, ::Colon, j::Int) =
 [vec(d)[k][j] for k in eachindex(d)]
 @inline Base.getindex(d::AbstractStateSpaceSet, i::AbstractVector, j::Int) =
-[vec(d)[k][j] for k in i]
+[point[j] for point in vec(d)[i]]
 @inline Base.getindex(d::AbstractStateSpaceSet, i::Int, j::AbstractVector) = d[i][j]
 @inline Base.getindex(d::AbstractStateSpaceSet, ::Colon, ::Colon) = d
-@inline Base.getindex(d::AbstractStateSpaceSet, ::Colon, v::AbstractVector) =
-StateSpaceSet([d[i][v] for i in eachindex(d)])
-@inline Base.getindex(d::AbstractStateSpaceSet, v1::AbstractVector, v::AbstractVector) =
-StateSpaceSet([d[i][v] for i in v1])
+
+function Base.getindex(d::AbstractStateSpaceSet{D,T,V}, ::Colon, cols::AbstractVector) where {D,T,V}
+    js = cols isa AbstractVector{Bool} ? findall(cols) : collect(cols)
+    D2 = length(js)
+    V2 = V <: SVector ? SVector{D2,T} : V <: MVector ? MVector{D2,T} : Vector{T}
+    data = Vector{V2}(undef, length(d))
+    for i in eachindex(d)
+        @inbounds data[i] = V2(d[i][js])
+    end
+    names = isnothing(d.names) ? nothing : collect(d.names)[js]
+    return StateSpaceSet{D2,T,V2,typeof(names)}(data, names)
+end
+
+function Base.getindex(
+        d::AbstractStateSpaceSet{D,T,V}, rows::AbstractVector, cols::AbstractVector,
+    ) where {D,T,V}
+    points = vec(d)[rows]
+    js = cols isa AbstractVector{Bool} ? findall(cols) : collect(cols)
+    D2 = length(js)
+    V2 = V <: SVector ? SVector{D2,T} : V <: MVector ? MVector{D2,T} : Vector{T}
+    data = Vector{V2}(undef, length(points))
+    for i in eachindex(points)
+        @inbounds data[i] = V2(points[i][js])
+    end
+    names = isnothing(d.names) ? nothing : collect(d.names)[js]
+    return StateSpaceSet{D2,T,V2,typeof(names)}(data, names)
+end
 
 # Set index stuff
 @inline Base.setindex!(d::AbstractStateSpaceSet, v, i::Int) = (vec(d)[i] = v)
