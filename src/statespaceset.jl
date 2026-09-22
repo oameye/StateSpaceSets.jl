@@ -111,31 +111,35 @@ Base.hcat(y::AbstractStateSpaceSet, x::AbstractVector...) = _hcat(y, x...)
 Base.hcat(z::AbstractVector{<:Real}, y::AbstractStateSpaceSet, x::AbstractVector...) = _hcat(z, y, x...)
 
 function _hcat(xs::Union{AbstractVector{<:Real}, AbstractStateSpaceSet}...)
-    ds = StateSpaceSet.(xs)
-    Ls = length.(ds)
-    maxlen = maximum(Ls)
-    all(Ls .== maxlen) || error("StateSpaceSets must be of same length")
+    L = length(first(xs))
+    all(length(x) == L for x in xs) || error("StateSpaceSets must be of same length")
+
     V = findcontainertype(xs...)
-    newdim = sum(dimension.(ds))
-    T = promote_type(eltype.(eltype.(ds))...)
-    if V <: SVector
-        V2 = SVector{newdim, T}
-    else
-        V2 = Vector{T}
-    end
-    v = Vector{V2}(undef, maxlen)
-    for i = 1:maxlen
-        if V <: SVector
-            e = V2(Iterators.flatten(d[i] for d in xs)...,)
-        else
-            e = V2(collect(Iterators.flatten(d[i] for d in xs)))
+    D = sum(x isa AbstractStateSpaceSet ? dimension(x) : 1 for x in xs)
+    T = promote_type((x isa AbstractStateSpaceSet ? eltype(eltype(x)) : eltype(x) for x in xs)...)
+    V2 = V <: SVector ? SVector{D,T} : Vector{T}
+    data = Vector{V2}(undef, L)
+    scratch = V <: SVector ? Vector{T}(undef, D) : nothing
+
+    for i in 1:L
+        point = V <: SVector ? scratch : Vector{T}(undef, D)
+        k = 1
+        for x in xs
+            if x isa AbstractStateSpaceSet
+                p = x[i]
+                for j in eachindex(p)
+                    @inbounds point[k] = p[j]
+                    k += 1
+                end
+            else
+                @inbounds point[k] = x[i]
+                k += 1
+            end
         end
-        v[i] = e
+        @inbounds data[i] = V <: SVector ? V2(point) : point
     end
-    return StateSpaceSet(v; container = V2)
+    return StateSpaceSet{D,T,V2,Nothing}(data, nothing)
 end
-
-
 
 function findcontainertype(xs::Union{AbstractVector{<:Real}, AbstractStateSpaceSet}...)
     for x in xs
